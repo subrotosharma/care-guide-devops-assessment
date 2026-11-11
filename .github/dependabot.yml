@@ -15,12 +15,11 @@ updates:
       - "/terraform/environments/*"
       - "/terraform/modules/*"
     schedule: { interval: weekly }
-    # Stay on AWS provider 5.x. A 6.x move must change all five Terraform files and
-    # lock files together, so do it by hand rather than as separate per-folder PRs.
+    # Stay on AWS provider 5.x. Moving to 6.x must change every Terraform folder and lock
+    # file together, so do it by hand, not as separate per-folder PRs.
     ignore:
       - dependency-name: "hashicorp/aws"
-        update-types: ["version-update:semver-major"]
-    # One PR for all the Terraform folders, so they cannot drift apart.
+        versions: [">= 6.0.0"]
     groups:
       terraform-providers:
         patterns: ["*"]
