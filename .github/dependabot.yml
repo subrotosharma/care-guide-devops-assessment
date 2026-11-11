@@ -10,5 +10,17 @@ updates:
     directory: /
     schedule: { interval: weekly }
   - package-ecosystem: terraform
-    directories: ["/terraform/bootstrap", "/terraform/environments/*"]
+    directories:
+      - "/terraform/bootstrap"
+      - "/terraform/environments/*"
+      - "/terraform/modules/*"
     schedule: { interval: weekly }
+    # Stay on AWS provider 5.x. A 6.x move must change all five Terraform files and
+    # lock files together, so do it by hand rather than as separate per-folder PRs.
+    ignore:
+      - dependency-name: "hashicorp/aws"
+        update-types: ["version-update:semver-major"]
+    # One PR for all the Terraform folders, so they cannot drift apart.
+    groups:
+      terraform-providers:
+        patterns: ["*"]
