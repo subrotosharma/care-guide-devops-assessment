@@ -1,0 +1,76 @@
+# Thresholds and `for` durations are explained in README.md (Alerting section).
+groups:
+  - name: application
+    rules:
+      - alert: AppInstanceDown
+        expr: up{job="app"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "App instance {{ $labels.instance }} is down"
+          description: "Prometheus has failed to scrape {{ $labels.instance }} for more than 1 minute."
+
+      - alert: AppHighErrorRate
+        # Probe and scrape traffic (/health, /metrics) is excluded so it cannot
+        # dilute the ratio. The second clause stops a single failed request on
+        # an idle service from reading as a 100% error rate.
+        expr: |
+          (
+            sum(rate(http_request_errors_total{job="app", path!~"/health|/metrics"}[5m]))
+            /
+            sum(rate(http_requests_total{job="app", path!~"/health|/metrics"}[5m]))
+          ) > 0.05
+          and
+          sum(rate(http_requests_total{job="app", path!~"/health|/metrics"}[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 5% of app requests are failing with 5xx"
+          description: "5xx ratio over the last 5m is {{ $value | humanizePercentage }}."
+
+  - name: host
+    rules:
+      - alert: HostDiskUsageHigh
+        # Same arithmetic as `df`: used / (used + available to unprivileged
+        # users). 1 - avail/size would count ext4's reserved blocks as used and
+        # disagree with both df and scripts/system_health.sh. max by (device)
+        # collapses bind mounts of the same device into one alert.
+        expr: |
+          max by (instance, device) (
+            (
+              node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs|fuse.*"}
+              - node_filesystem_free_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs|fuse.*"}
+            )
+            /
+            (
+              node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs|fuse.*"}
+              - node_filesystem_free_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs|fuse.*"}
+              + node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs|fuse.*"}
+            )
+          ) * 100 > 80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk {{ $labels.device }} is above 80% full"
+          description: "{{ $labels.device }} on {{ $labels.instance }} is {{ $value | printf \"%.1f\" }}% used."
+
+  - name: containers
+    rules:
+      - alert: ContainerMemoryNearLimit
+        # working_set is what the kernel OOM killer reasons about; plain
+        # "usage" includes reclaimable page cache and would alert too early.
+        # `> 0` on the limit drops containers without a memory limit, which
+        # cAdvisor reports as 0 and would otherwise divide to +Inf.
+        expr: |
+          container_memory_working_set_bytes{name!=""}
+            / (container_spec_memory_limit_bytes{name!=""} > 0)
+          > 0.90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} is above 90% of its memory limit"
+          description: "{{ $labels.name }} is using {{ $value | humanizePercentage }} of its memory limit."

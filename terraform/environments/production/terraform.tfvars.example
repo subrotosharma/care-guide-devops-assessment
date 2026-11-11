@@ -1,0 +1,7 @@
+# cp terraform.tfvars.example terraform.tfvars  (terraform.tfvars is git-ignored)
+region                   = "us-east-1"
+github_repository        = "your-github-user/care-guide-devops-assessment"
+github_oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+
+# In a real production setup this would be the load balancer's security group, not the internet.
+allowed_ingress_cidrs = ["0.0.0.0/0"]

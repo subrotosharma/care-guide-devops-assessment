@@ -1,0 +1,14 @@
+flowchart TB
+    user([Client]) --> ing[Ingress<br/>nginx, devops-task.localtest.me]
+    ing --> svc[Service devops-task :80]
+    svc --> p1[Pod 1<br/>non-root, read-only rootfs]
+    svc --> p2[Pod 2]
+    svc -.-> p3[Pod 3..5<br/>added by HPA]
+    cm[ConfigMap<br/>APP_ENV, LOG_LEVEL, APP_PORT] --> p1
+    cm --> p2
+    sec[Secret devops-task-secrets<br/>optional, created out of band] -.-> p1
+    hpa[HPA: CPU 70% of request<br/>min 2, max 5] -->|scales| dep[Deployment<br/>RollingUpdate maxSurge 1, maxUnavailable 0]
+    dep --> p1
+    dep --> p2
+    pdb[PodDisruptionBudget<br/>minAvailable 1] -.-> dep
+    ms[metrics-server] --> hpa

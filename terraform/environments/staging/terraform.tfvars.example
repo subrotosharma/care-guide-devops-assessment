@@ -1,0 +1,7 @@
+# cp terraform.tfvars.example terraform.tfvars  (terraform.tfvars is git-ignored)
+region                   = "us-east-1"
+github_repository        = "your-github-user/care-guide-devops-assessment"
+github_oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+
+# Staging is open to the internet for the demo. Narrow this to your own IP (x.x.x.x/32) if you can.
+allowed_ingress_cidrs = ["0.0.0.0/0"]

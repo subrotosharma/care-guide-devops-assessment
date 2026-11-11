@@ -1,0 +1,8 @@
+flowchart LR
+    code[Code commit] --> gha[GitHub Actions]
+    gha --> gates[Lint, test, scan<br/>ruff, pytest, hadolint,<br/>shellcheck, Trivy]
+    gates --> reg[(GHCR<br/>amd64 + arm64)]
+    reg -->|SSM over OIDC role| ec2[EC2 host<br/>Docker + app container]
+    ec2 -->|awslogs driver| cwl[(CloudWatch Logs<br/>retention set)]
+    reg -.->|local cluster| k8s[kind: Deployment x2,<br/>Service, Ingress, HPA]
+    tf[Terraform<br/>S3 state + lockfile] -->|provisions| ec2

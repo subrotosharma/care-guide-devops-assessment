@@ -1,0 +1,170 @@
+# Run with: promtool test rules monitoring/prometheus/tests/alerts_test.yml
+rule_files:
+  - ../rules/alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ---- AppInstanceDown -----------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'up{job="app", instance="app:8080"}'
+        values: '1 1 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 2m # first failed scrape: pending, `for` not yet satisfied
+        alertname: AppInstanceDown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: AppInstanceDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: app
+              instance: "app:8080"
+            exp_annotations:
+              summary: "App instance app:8080 is down"
+              description: "Prometheus has failed to scrape app:8080 for more than 1 minute."
+
+  # ---- AppHighErrorRate: 20% of real traffic fails ---------------------------
+  - interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="app", method="GET", path="/", status="200"}'
+        values: '0+48x30'
+      - series: 'http_requests_total{job="app", method="GET", path="/fault", status="500"}'
+        values: '0+12x30'
+      - series: 'http_request_errors_total{job="app", method="GET", path="/fault"}'
+        values: '0+12x30'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: AppHighErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "More than 5% of app requests are failing with 5xx"
+              description: "5xx ratio over the last 5m is 20%."
+
+  # ---- AppHighErrorRate: 100% errors but almost no traffic must not page ------
+  - interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="app", method="GET", path="/fault", status="500"}'
+        values: '0 0 0 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'http_request_errors_total{job="app", method="GET", path="/fault"}'
+        values: '0 0 0 1 1 1 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: AppHighErrorRate
+        exp_alerts: []
+
+  # ---- AppHighErrorRate: failing /health probes alone are excluded ------------
+  - interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="app", method="GET", path="/", status="200"}'
+        values: '0+60x30'
+      - series: 'http_requests_total{job="app", method="GET", path="/health", status="500"}'
+        values: '0+60x30'
+      - series: 'http_request_errors_total{job="app", method="GET", path="/health"}'
+        values: '0+60x30'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: AppHighErrorRate
+        exp_alerts: []
+
+  # ---- HostDiskUsageHigh: 85% used for >10m fires; 70% does not ---------------
+  - interval: 1m
+    input_series:
+      - series: 'node_filesystem_size_bytes{instance="n1", device="/dev/vda1", fstype="ext4", mountpoint="/"}'
+        values: '100000x20'
+      - series: 'node_filesystem_free_bytes{instance="n1", device="/dev/vda1", fstype="ext4", mountpoint="/"}'
+        values: '15000x20'
+      - series: 'node_filesystem_avail_bytes{instance="n1", device="/dev/vda1", fstype="ext4", mountpoint="/"}'
+        values: '15000x20'
+      # same device bind-mounted elsewhere: must collapse into one alert
+      - series: 'node_filesystem_size_bytes{instance="n1", device="/dev/vda1", fstype="ext4", mountpoint="/var/lib/docker"}'
+        values: '100000x20'
+      - series: 'node_filesystem_free_bytes{instance="n1", device="/dev/vda1", fstype="ext4", mountpoint="/var/lib/docker"}'
+        values: '15000x20'
+      - series: 'node_filesystem_avail_bytes{instance="n1", device="/dev/vda1", fstype="ext4", mountpoint="/var/lib/docker"}'
+        values: '15000x20'
+      - series: 'node_filesystem_size_bytes{instance="n1", device="/dev/vdb", fstype="ext4", mountpoint="/data"}'
+        values: '100000x20'
+      - series: 'node_filesystem_free_bytes{instance="n1", device="/dev/vdb", fstype="ext4", mountpoint="/data"}'
+        values: '30000x20'
+      - series: 'node_filesystem_avail_bytes{instance="n1", device="/dev/vdb", fstype="ext4", mountpoint="/data"}'
+        values: '30000x20'
+      # tmpfs is ignored even when full
+      - series: 'node_filesystem_size_bytes{instance="n1", device="tmpfs", fstype="tmpfs", mountpoint="/run"}'
+        values: '100000x20'
+      - series: 'node_filesystem_free_bytes{instance="n1", device="tmpfs", fstype="tmpfs", mountpoint="/run"}'
+        values: '0x20'
+      - series: 'node_filesystem_avail_bytes{instance="n1", device="tmpfs", fstype="tmpfs", mountpoint="/run"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: HostDiskUsageHigh
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: HostDiskUsageHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: n1
+              device: /dev/vda1
+            exp_annotations:
+              summary: "Disk /dev/vda1 is above 80% full"
+              description: "/dev/vda1 on n1 is 85.0% used."
+
+  # ---- HostDiskUsageHigh: reserved blocks must not count as used ---------------
+  # size 100000, free 30000 (used 70000), avail 19000 (11000 reserved for root).
+  # df reports 70000 / (70000 + 19000) = 78.7%, so no alert. A 1 - avail/size
+  # formula would give 81% and page for a disk that df says is fine.
+  - interval: 1m
+    input_series:
+      - series: 'node_filesystem_size_bytes{instance="n1", device="/dev/sdc", fstype="ext4", mountpoint="/c"}'
+        values: '100000x20'
+      - series: 'node_filesystem_free_bytes{instance="n1", device="/dev/sdc", fstype="ext4", mountpoint="/c"}'
+        values: '30000x20'
+      - series: 'node_filesystem_avail_bytes{instance="n1", device="/dev/sdc", fstype="ext4", mountpoint="/c"}'
+        values: '19000x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: HostDiskUsageHigh
+        exp_alerts: []
+
+  # ---- ContainerMemoryNearLimit ------------------------------------------------
+  - interval: 1m
+    input_series:
+      # 95% of limit
+      - series: 'container_memory_working_set_bytes{name="devops-app", id="/docker/a"}'
+        values: '121634816x20'
+      - series: 'container_spec_memory_limit_bytes{name="devops-app", id="/docker/a"}'
+        values: '134217728x20'
+      # 50% of limit
+      - series: 'container_memory_working_set_bytes{name="grafana", id="/docker/b"}'
+        values: '268435456x20'
+      - series: 'container_spec_memory_limit_bytes{name="grafana", id="/docker/b"}'
+        values: '536870912x20'
+      # no limit configured (cAdvisor reports 0): must never alert
+      - series: 'container_memory_working_set_bytes{name="unbounded", id="/docker/c"}'
+        values: '900000000x20'
+      - series: 'container_spec_memory_limit_bytes{name="unbounded", id="/docker/c"}'
+        values: '0x20'
+      # host cgroup root has no `name` label: ignored
+      - series: 'container_memory_working_set_bytes{id="/"}'
+        values: '900000000x20'
+      - series: 'container_spec_memory_limit_bytes{id="/"}'
+        values: '9223372036854771712x20'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ContainerMemoryNearLimit
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: ContainerMemoryNearLimit
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              name: devops-app
+              id: /docker/a
+            exp_annotations:
+              summary: "Container devops-app is above 90% of its memory limit"
+              description: "devops-app is using 90.62% of its memory limit."

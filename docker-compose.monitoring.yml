@@ -1,0 +1,174 @@
+# Overlay for docker-compose.yml. Run both files together:
+#   docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d --build
+#
+# Network layout
+#   monitoring (internal: true)  Prometheus, Loki, Alloy, Node Exporter, cAdvisor, and the
+#                                app / Grafana as peers. No route to the outside world and
+#                                nothing here publishes a port.
+#   default                      app (8080) and Grafana, the only two things reachable
+#                                from the host.
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  app:
+    networks: [default, monitoring]
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # Time AND size caps: whichever is hit first wins, so a metrics burst
+      # cannot fill the disk before 15 days are up.
+      - --storage.tsdb.retention.time=15d
+      - --storage.tsdb.retention.size=4GB
+      - --web.enable-lifecycle
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    networks: [monitoring]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 768M}
+
+  loki:
+    image: grafana/loki:3.5.0
+    container_name: loki
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+    volumes:
+      - ./monitoring/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki-data:/loki
+    networks: [monitoring]
+    restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 512M}
+
+  alloy:
+    image: grafana/alloy:v1.10.0
+    container_name: alloy
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./monitoring/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      # Read access to the Docker API for service discovery and log streaming.
+      # See README "Privileged mounts": the socket is root-equivalent on the host.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+    # Lets a non-root Alloy user open the socket: set DOCKER_GID in .env to the
+    # output of `stat -c %g /var/run/docker.sock`.
+    group_add: ["${DOCKER_GID:-999}"]
+    depends_on: [loki]
+    networks: [monitoring]
+    restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 384M}
+
+  node-exporter:
+    image: prom/node-exporter:v1.9.1
+    container_name: node-exporter
+    command:
+      - --path.rootfs=/host
+      # Skip Docker's own overlay mounts so each filesystem is reported once
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/containers/storage/.+)($$|/)
+    volumes:
+      # Needed so the filesystem collector can statfs the host's real mounts.
+      # Read-only; rslave so mounts made later on the host show up.
+      - /:/host:ro
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    networks: [monitoring]
+    restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits: {cpus: "0.25", memory: 64M}
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.52.1
+    container_name: cadvisor
+    command:
+      - --docker_only=true
+      - --housekeeping_interval=15s
+      - --store_container_labels=false
+    volumes:
+      # All read-only. cAdvisor walks cgroups and Docker's storage to attribute
+      # usage to containers; it does not need to write anywhere on the host.
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    # Deliberately not `privileged: true`. cAdvisor's docs mention it for a few
+    # optional metrics (e.g. OOM events from /dev/kmsg); core CPU/memory/network do not need it.
+    networks: [monitoring]
+    restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 256M}
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    container_name: grafana
+    environment:
+      # `:?` makes compose abort with a clear message instead of starting with a default password
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:?set GRAFANA_ADMIN_USER in .env}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/application.json
+    ports:
+      # Loopback only. Put a reverse proxy with TLS in front before exposing it further.
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on: [prometheus, loki]
+    networks: [default, monitoring]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 512M}
+
+networks:
+  monitoring:
+    internal: true
+
+volumes:
+  prometheus-data:
+  loki-data:
+  alloy-data:
+  grafana-data:

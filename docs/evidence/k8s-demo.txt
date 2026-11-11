@@ -1,0 +1,127 @@
+
+[1m### Create cluster[0m
+No kind clusters found.
+Creating cluster "devops-task" ...
+ • Ensuring node image (kindest/node:v1.37.0) 🖼️  ...
+ ✓ Ensuring node image (kindest/node:v1.37.0) 🖼️
+ • Preparing nodes 📦 📦 📦   ...
+ ✓ Preparing nodes 📦 📦 📦 
+ • Writing configuration 📜  ...
+ ✓ Writing configuration 📜
+ • Starting control-plane 🕹️  ...
+ ✓ Starting control-plane 🕹️
+ • Installing CNI 🔌  ...
+ ✓ Installing CNI 🔌
+ • Installing StorageClass 💾  ...
+ ✓ Installing StorageClass 💾
+ • Joining worker nodes 🚜  ...
+ ✓ Joining worker nodes 🚜
+ • Waiting ≤ 2m0s for control-plane = Ready ⏳  ...
+ ✓ Waiting ≤ 2m0s for control-plane = Ready ⏳
+ • Ready after 7s 💚
+Set kubectl context to "kind-devops-task"
+You can now use your cluster with:
+
+kubectl cluster-info --context kind-devops-task
+
+Thanks for using kind! 😊
+
+[1m### Build and load images 1.0.0 and 1.1.0 (APP_VERSION is baked in at build time)[0m
+Image: "devops-task:1.0.0" with ID "sha256:e9a40038e51f84408e45bd19834c9fc8bb06234522bf98a486852275ff9e521d" not yet present on node "devops-task-control-plane", loading...
+Image: "devops-task:1.0.0" with ID "sha256:e9a40038e51f84408e45bd19834c9fc8bb06234522bf98a486852275ff9e521d" not yet present on node "devops-task-worker2", loading...
+Image: "devops-task:1.0.0" with ID "sha256:e9a40038e51f84408e45bd19834c9fc8bb06234522bf98a486852275ff9e521d" not yet present on node "devops-task-worker", loading...
+Image: "devops-task:1.1.0" with ID "sha256:165719b09776efc6d383cf7a046e46cfc9ef9e4850c28cd5fc7df91fa442bafe" not yet present on node "devops-task-control-plane", loading...
+Image: "devops-task:1.1.0" with ID "sha256:165719b09776efc6d383cf7a046e46cfc9ef9e4850c28cd5fc7df91fa442bafe" not yet present on node "devops-task-worker2", loading...
+Image: "devops-task:1.1.0" with ID "sha256:165719b09776efc6d383cf7a046e46cfc9ef9e4850c28cd5fc7df91fa442bafe" not yet present on node "devops-task-worker", loading...
+
+[1m### 1. Initial deployment[0m
+$ kubectl apply -k ./k8s
+namespace/devops-task created
+serviceaccount/devops-task created
+configmap/devops-task-config created
+service/devops-task created
+deployment.apps/devops-task created
+poddisruptionbudget.policy/devops-task created
+horizontalpodautoscaler.autoscaling/devops-task created
+ingress.networking.k8s.io/devops-task created
+$ kubectl -n devops-task rollout status deploy/devops-task --timeout=120s
+Waiting for deployment "devops-task" rollout to finish: 0 of 2 updated replicas are available...
+Waiting for deployment "devops-task" rollout to finish: 1 of 2 updated replicas are available...
+deployment "devops-task" successfully rolled out
+$ kubectl -n devops-task get deploy,pods,svc,hpa,pdb -o wide
+NAME                          READY   UP-TO-DATE   AVAILABLE   AGE   CONTAINERS   IMAGES              SELECTOR
+deployment.apps/devops-task   2/2     2            2           12s   app          devops-task:1.0.0   app.kubernetes.io/name=devops-task
+
+NAME                              READY   STATUS    RESTARTS   AGE   IP           NODE                  NOMINATED NODE   READINESS GATES
+pod/devops-task-65754d4c7-4nqqx   1/1     Running   0          12s   10.244.1.2   devops-task-worker    <none>           <none>
+pod/devops-task-65754d4c7-dbxld   1/1     Running   0          12s   10.244.2.2   devops-task-worker2   <none>           <none>
+
+NAME                  TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)   AGE   SELECTOR
+service/devops-task   ClusterIP   10.96.169.57   <none>        80/TCP    12s   app.kubernetes.io/name=devops-task
+
+NAME                                              REFERENCE                TARGETS              MINPODS   MAXPODS   REPLICAS   AGE
+horizontalpodautoscaler.autoscaling/devops-task   Deployment/devops-task   cpu: <unknown>/70%   2         5         2          12s
+
+NAME                                     MIN AVAILABLE   MAX UNAVAILABLE   ALLOWED DISRUPTIONS   AGE
+poddisruptionbudget.policy/devops-task   1               N/A               1                     12s
+
+[1m### 2. Zero-downtime rolling update 1.0.0 -> 1.1.0 (in-cluster client polls /health every 0.2s)[0m
+$ helper pod 'probe' (restricted securityContext) polling http://devops-task/health every 0.2s
+$ kubectl -n devops-task set image deploy/devops-task app=devops-task:1.1.0
+deployment.apps/devops-task image updated
+$ kubectl -n devops-task rollout status deploy/devops-task --timeout=180s
+Waiting for deployment "devops-task" rollout to finish: 1 out of 2 new replicas have been updated...
+Waiting for deployment "devops-task" rollout to finish: 1 out of 2 new replicas have been updated...
+Waiting for deployment "devops-task" rollout to finish: 1 out of 2 new replicas have been updated...
+Waiting for deployment "devops-task" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "devops-task" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "devops-task" rollout to finish: 1 old replicas are pending termination...
+deployment "devops-task" successfully rolled out
+$ kubectl -n devops-task rollout history deploy/devops-task
+deployment.apps/devops-task 
+REVISION  CHANGE-CAUSE
+1         <none>
+2         <none>
+
+Waiting for the probe to finish...
+$ kubectl -n devops-task logs pod/probe
+requests_ok=400 requests_failed=0
+
+[1m### 3. Failed rollout: bad configuration, readiness never passes, old pods keep serving[0m
+$ kubectl -n devops-task set env deploy/devops-task LOG_LEVEL=LOUD
+deployment.apps/devops-task env updated
+Waiting for deployment "devops-task" rollout to finish: 1 out of 2 new replicas have been updated...
+error: timed out waiting for the condition
+(rollout did not complete, as intended)
+$ kubectl -n devops-task get pods
+NAME                           READY   STATUS             RESTARTS      AGE
+devops-task-8655b6545c-9nxgb   0/1     CrashLoopBackOff   2 (19s ago)   40s
+devops-task-f7689dc8-fgwh6     1/1     Running            0             118s
+devops-task-f7689dc8-tzs6q     1/1     Running            0             2m10s
+probe                          0/1     Completed          0             2m21s
+Service still answering from the healthy old pods:
+$ kubectl -n devops-task logs pod/curl-check
+{"message":"Hello from DevOps Task!","status":"running","version":"1.1.0"}
+[1m### 4. Rollback with kubectl rollout undo[0m
+$ kubectl -n devops-task rollout undo deploy/devops-task
+Warning: resource deployments/devops-task was previously managed with 'kubectl apply'. Rolling back will not update the kubectl.kubernetes.io/last-applied-configuration annotation, which may cause unexpected behavior on future 'kubectl apply' operations. Consider using 'kubectl apply' with your previous configuration file instead.
+deployment.apps/devops-task rolled back
+$ kubectl -n devops-task rollout status deploy/devops-task --timeout=120s
+deployment "devops-task" successfully rolled out
+$ kubectl -n devops-task get pods
+NAME                           READY   STATUS      RESTARTS     AGE
+devops-task-8655b6545c-9nxgb   0/1     Error       3 (9s ago)   54s
+devops-task-f7689dc8-fgwh6     1/1     Running     0            2m12s
+devops-task-f7689dc8-tzs6q     1/1     Running     0            2m24s
+probe                          0/1     Completed   0            2m35s
+$ kubectl -n devops-task rollout history deploy/devops-task
+deployment.apps/devops-task 
+REVISION  CHANGE-CAUSE
+1         <none>
+3         <none>
+4         <none>
+
+$ kubectl -n devops-task get deploy devops-task -o jsonpath={.spec.template.spec.containers[0].image}{"\n"}
+devops-task:1.1.0
+
+[1m### Done. Remove the cluster with: scripts/k8s_demo.sh cleanup[0m

@@ -1,0 +1,3 @@
+# /etc/cron.d/system-health - alternative to the systemd timer
+# Every 5 minutes. flock -n skips a run if the previous one is still going.
+*/5 * * * * root flock -n /run/system_health.cron.lock /usr/local/bin/system_health.sh --log-file /var/log/system_health/health_log.txt >/dev/null 2>&1

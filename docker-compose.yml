@@ -1,0 +1,48 @@
+name: devops-task
+
+services:
+  app:
+    build:
+      context: .
+      args:
+        APP_VERSION: ${APP_VERSION:-0.1.0}
+    image: ${IMAGE:-devops-task}:${IMAGE_TAG:-local}
+    container_name: devops-app
+    ports:
+      - "8080:8080"
+    environment:
+      APP_PORT: "8080"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      APP_ENV: ${APP_ENV:-local}
+      APP_VERSION: ${APP_VERSION:-0.1.0}
+      ENABLE_FAULT_INJECTION: ${ENABLE_FAULT_INJECTION:-false}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2).status == 200 else 1)"
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    stop_grace_period: 15s
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 128M
+          pids: 100
+        reservations:
+          cpus: "0.10"
+          memory: 64M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

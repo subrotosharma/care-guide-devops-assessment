@@ -1,0 +1,126 @@
+name: PR checks
+
+on:
+  pull_request:
+    branches: [main]
+
+# Read-only by default; no job here needs to write to the repository or registry.
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Lint and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check .
+      - name: Unit tests with coverage
+        run: pytest --cov --cov-report=term-missing --cov-report=xml --cov-report=html
+      - name: Coverage summary
+        if: always()
+        run: |
+          {
+            echo "### Coverage"
+            python -m coverage report --format=markdown 2>/dev/null || true
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: coverage
+          path: |
+            coverage.xml
+            htmlcov/
+
+  dockerfile-lint:
+    name: Hadolint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        with:
+          dockerfile: Dockerfile
+
+  shell:
+    name: ShellCheck and script tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: ShellCheck
+        run: shellcheck scripts/*.sh scripts/ci/*.sh terraform/modules/app_host/files/*.sh tests/*.sh
+      - name: Script tests
+        run: |
+          ./tests/test_ssm_deploy.sh
+          ./tests/test_system_health.sh
+
+  config:
+    name: Validate Terraform, Kubernetes and monitoring config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.10.5"
+      - name: Terraform fmt and validate
+        run: |
+          terraform fmt -recursive -check terraform
+          for dir in terraform/bootstrap terraform/environments/staging terraform/environments/production; do
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+          done
+      - name: Kubernetes manifests (kubeconform)
+        run: |
+          docker run --rm -v "$PWD/k8s:/k8s:ro" ghcr.io/yannh/kubeconform:v0.6.7 \
+            -strict -summary -ignore-missing-schemas /k8s
+      - name: Prometheus config, rules and rule unit tests
+        run: |
+          docker run --rm --entrypoint promtool -v "$PWD/monitoring/prometheus:/p:ro" prom/prometheus:v3.5.0 check config /p/prometheus.yml
+          docker run --rm --entrypoint promtool -v "$PWD/monitoring/prometheus:/p:ro" prom/prometheus:v3.5.0 test rules /p/tests/alerts_test.yml
+      - name: Compose files
+        run: |
+          cp .env.example .env
+          docker compose -f docker-compose.yml -f docker-compose.monitoring.yml config --quiet
+
+  image:
+    name: Build image and scan with Trivy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build (single platform, loaded locally for scanning)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          push: false
+          tags: devops-task:pr-${{ github.event.pull_request.number }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Image size
+        run: |
+          size=$(docker image inspect devops-task:pr-${{ github.event.pull_request.number }} --format '{{.Size}}')
+          echo "### Image size: $((size / 1024 / 1024)) MiB" >> "$GITHUB_STEP_SUMMARY"
+      - name: Trivy report (HIGH and CRITICAL, informational)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: devops-task:pr-${{ github.event.pull_request.number }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
+      - name: Trivy gate (fail on CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: devops-task:pr-${{ github.event.pull_request.number }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"

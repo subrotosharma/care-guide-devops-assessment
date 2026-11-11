@@ -1,0 +1,41 @@
+#cloud-config
+# Bootstraps Docker and the deploy helper. Runs once at first boot.
+package_update: true
+packages:
+  - docker
+
+write_files:
+  - path: /usr/local/bin/deploy-app.sh
+    permissions: "0755"
+    owner: root:root
+    encoding: b64
+    content: ${deploy_script_b64}
+
+  - path: /etc/app/deploy.env
+    permissions: "0644"
+    content: |
+      APP_PORT=${app_port}
+      AWS_REGION=${region}
+      LOG_GROUP=${log_group}
+      LOG_STREAM_PREFIX=${log_stream_prefix}
+      MEMORY_LIMIT=${memory_limit}
+      CPU_LIMIT=${cpu_limit}
+      REGISTRY_HOST=${registry_host}
+      REGISTRY_USER=${registry_user}
+      REGISTRY_TOKEN_PARAM=${registry_token}
+
+  # Non-secret container configuration. Secrets do not belong in user data,
+  # which is readable from the instance metadata and the EC2 console.
+  - path: /etc/app/app.env
+    permissions: "0644"
+    content: |
+%{ for key, value in app_env ~}
+      ${key}=${value}
+%{ endfor ~}
+
+runcmd:
+  - systemctl enable --now docker
+  - mkdir -p /var/lib/app
+%{ if initial_image != "" ~}
+  - /usr/local/bin/deploy-app.sh deploy ${initial_image}
+%{ endif ~}

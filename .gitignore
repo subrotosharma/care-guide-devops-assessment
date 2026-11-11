@@ -1,0 +1,32 @@
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# local config / secrets
+.env
+*.pem
+*.key
+
+# terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+override.tf
+override.tf.json
+*.auto.tfvars
+terraform.tfvars
+!terraform.tfvars.example
+# lock files are committed on purpose
+!.terraform.lock.hcl
+
+# script output
+health_log.txt
+health_log.txt.*

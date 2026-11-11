@@ -1,0 +1,69 @@
+Local validation run, 2026-11-10T19:42:06Z
+Host: sandbox without registry access; Docker daemon present but base images not pullable.
+
+$ ruff check . && ruff format --check .
+All checks passed!
+16 files already formatted
+
+$ pytest --cov
+.....................                                                    [100%]
+================================ tests coverage ================================
+_______________ coverage: platform linux, python 3.13.18-final-0 _______________
+
+Name                    Stmts   Miss  Cover   Missing
+-----------------------------------------------------
+app/__init__.py             0      0   100%
+app/config.py              25      0   100%
+app/logging_config.py      28      0   100%
+app/main.py                61      0   100%
+-----------------------------------------------------
+TOTAL                     114      0   100%
+Required test coverage of 90.0% reached. Total coverage: 100.00%
+21 passed in 0.93s
+
+$ shellcheck scripts/*.sh scripts/ci/*.sh tests/*.sh terraform/modules/app_host/files/*.sh
+no findings
+
+$ hadolint Dockerfile
+no findings
+
+$ actionlint
+no findings
+
+$ tests/test_system_health.sh
+ok   - active log stays small after rotation (574 bytes)
+
+26 passed, 0 failed
+
+$ tests/test_ssm_deploy.sh
+ok   success
+ok   rolled back
+ok   no previous image
+ok   rollback failed
+ok   ssm failure
+ok   ssm timeout
+ok   rejects injected image ref
+
+$ promtool (v3.5.0) check config / test rules
+ SUCCESS: monitoring/prometheus/prometheus.yml is valid prometheus config file syntax
+
+  SUCCESS
+
+
+$ loki 3.5.0 -verify-config
+exit=0
+
+$ alloy v1.10.0 validate
+exit=0
+
+$ kustomize build k8s | kubeconform -strict -kubernetes-version 1.33.0
+Summary: 8 resources found parsing stdin - Valid: 8, Invalid: 0, Errors: 0, Skipped: 0
+
+$ tofu fmt -check -recursive terraform (OpenTofu 1.10.6)
+formatted
+
+$ tofu init -backend=false  (expected to fail here: registry.opentofu.org is blocked)
+│ "https://registry.opentofu.org/.well-known/terraform.json": Forbidden
+
+$ docker compose config --quiet (with .env.example)
+valid

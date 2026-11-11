@@ -1,0 +1,23 @@
+[Unit]
+Description=Host health check (CPU, memory, disk, load)
+Documentation=file:///usr/local/share/doc/system_health/README
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/system_health.sh --log-file /var/log/system_health/health_log.txt
+# 1 = threshold warning. Treat that as a normal run; only exit 2 (critical)
+# and 3 (usage/data error) mark the unit failed, which is what alerting keys on.
+SuccessExitStatus=1
+
+# Writes only to /var/log/system_health, runs as a throwaway user.
+DynamicUser=yes
+LogsDirectory=system_health
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=

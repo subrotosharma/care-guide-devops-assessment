@@ -1,0 +1,32 @@
+flowchart LR
+    dev([Developer]) -->|push branch / open PR| pr
+    subgraph pr[Pull request workflow]
+        direction TB
+        lint[ruff lint] --> test[pytest + coverage]
+        test --> hl[Hadolint + ShellCheck]
+        hl --> cfg[terraform validate, kubeconform, promtool]
+        cfg --> build[docker build]
+        build --> trivy{Trivy: CRITICAL?}
+    end
+    trivy -- yes --> fail([PR blocked])
+    trivy -- no --> merge([Merge to main])
+    merge --> rel
+    subgraph rel[Release workflow]
+        direction TB
+        verify[lint + test] --> push[buildx amd64+arm64, GHA layer cache]
+        push --> ghcr[(GHCR<br/>tags: 1.0.N, sha-abc1234)]
+    end
+    ghcr --> stg
+    subgraph stg[Deploy staging]
+        direction TB
+        oidc1[OIDC to AWS role] --> ssm1[SSM SendCommand<br/>deploy-app.sh]
+        ssm1 --> smoke1{/health ok?}
+        smoke1 -- no --> rb1[roll back to previous tag]
+    end
+    stg --> prod
+    subgraph prod[Deploy production - approval gate]
+        direction TB
+        oidc2[OIDC to AWS role] --> ssm2[SSM SendCommand<br/>deploy-app.sh]
+        ssm2 --> smoke2{/health ok?}
+        smoke2 -- no --> rb2[roll back to previous tag]
+    end

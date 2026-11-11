@@ -1,0 +1,26 @@
+flowchart LR
+    subgraph host[Docker host]
+        direction LR
+        subgraph net[monitoring network - internal, no published ports]
+            app[app :8080<br/>/metrics + JSON logs]
+            ne[node-exporter :9100]
+            cad[cAdvisor :8080]
+            prom[(Prometheus<br/>15d / 4GB retention)]
+            alloy[Grafana Alloy]
+            loki[(Loki<br/>7d retention)]
+            graf[Grafana]
+        end
+        sock[/var/run/docker.sock - read-only/]
+        fs[/host rootfs, /sys, /var/lib/docker - read-only/]
+    end
+    prom -- scrape 15s --> app
+    prom -- scrape --> ne
+    prom -- scrape --> cad
+    ne --- fs
+    cad --- fs
+    alloy -- container discovery + log stream --> sock
+    alloy -- parse JSON, label level, push --> loki
+    graf -- PromQL --> prom
+    graf -- LogQL --> loki
+    prom -- alert rules --> graf
+    you([You, 127.0.0.1:3000]) --> graf

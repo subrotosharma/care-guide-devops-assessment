@@ -1,0 +1,88 @@
+// Docker container logs -> parse -> Loki.
+//
+// Label policy (see README "Log label choices"):
+//   indexed labels      : container, service, compose_project, level
+//   structured metadata : route, path, method, status, duration_ms
+// Anything unbounded (raw path, request ids, durations) stays out of the index.
+
+discovery.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "10s"
+}
+
+discovery.relabel "containers" {
+  // targets is empty on purpose: loki.source.docker takes the rules and applies
+  // them to the targets from discovery.docker itself.
+  targets = []
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "compose_project"
+  }
+}
+
+loki.source.docker "containers" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.containers.targets
+  relabel_rules = discovery.relabel.containers.rules
+  labels        = { job = "docker" }
+  forward_to    = [loki.process.app_json.receiver]
+}
+
+loki.process "app_json" {
+  forward_to = [loki.write.default.receiver]
+
+  // Only the app emits our JSON schema; other containers keep their raw lines.
+  stage.match {
+    selector = "{service=\"app\"}"
+
+    stage.json {
+      expressions = {
+        level       = "level",
+        message     = "message",
+        timestamp   = "timestamp",
+        path        = "path",
+        route       = "route",
+        method      = "method",
+        status      = "status",
+        duration_ms = "duration_ms",
+      }
+    }
+
+    // Use the app's own timestamp so Loki and Prometheus line up on the graph
+    stage.timestamp {
+      source = "timestamp"
+      format = "RFC3339"
+    }
+
+    // level has five possible values, so it is safe as an indexed label
+    stage.labels {
+      values = { level = "" }
+    }
+
+    stage.structured_metadata {
+      values = {
+        path        = "",
+        route       = "",
+        method      = "",
+        status      = "",
+        duration_ms = "",
+      }
+    }
+  }
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

@@ -1,0 +1,35 @@
+Native validation of the observability configuration
+=====================================================
+Date: 2026-11-10. Environment: a sandbox WITHOUT a Docker daemon and without access to any
+container registry, so the Compose stack itself could not be started there. Instead the same
+upstream releases that the Compose file pins were run as plain processes:
+  Prometheus 3.15.1, Loki 3.7.8, Alloy 1.21.2, node_exporter 1.12.0, cAdvisor 0.60.5
+(Compose pins prom/prometheus v3.5.0 etc.; promtool check/test also run in CI against those exact images.)
+
+What ran, using the files from this repository:
+  - python -m app (ENABLE_FAULT_INJECTION=true) generating 2xx, 404 and 500 traffic
+  - Prometheus with monitoring/prometheus/prometheus.yml and rules/ (targets re-pointed to localhost,
+    scrape interval shortened to 5s): all 4 targets up (app, node-exporter, cadvisor, prometheus)
+  - Loki with monitoring/loki/loki-config.yml (paths/ports redirected)
+  - Alloy with the repo's `loki.process "app_json"` block verbatim; only the log SOURCE was swapped
+    from the Docker socket to a file, because there is no Docker socket
+
+Results:
+  promtool check config ............ SUCCESS
+  promtool test rules .............. SUCCESS (alerts_test.yml)
+  loki -verify-config .............. exit 0
+  alloy validate config.alloy ...... exit 0
+  Dashboard PromQL queries executed live: 34/34 returned status=success
+      application dashboard: all queries returned data
+      host dashboard:        all queries returned data
+      containers dashboard:  valid but 0 series (cAdvisor sees no Docker containers in this sandbox)
+  Alert expressions evaluated live: AppHighErrorRate and HostDiskUsageHigh matched series
+      (fault traffic was sent; the sandbox disk is above 80%), AppInstanceDown and
+      ContainerMemoryNearLimit correctly matched nothing.
+  Loki label index after Alloy parsing: level is an indexed label (values: error, info);
+      path, route, method, status, duration_ms are structured metadata. Example query that worked:
+      {service="app", level="error"} | route="/fault"
+
+NOT verified here (needs a machine with Docker): Grafana provisioning actually loading the
+dashboards, Alloy Docker service discovery, cAdvisor per-container series, rendered screenshots.
+Run `make up-monitoring` and `make screenshots` on such a machine.
